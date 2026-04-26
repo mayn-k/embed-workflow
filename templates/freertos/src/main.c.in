@@ -1,0 +1,64 @@
+/*
+ * main.c — FreeRTOS demo on @BOARD_NAME@
+ *
+ * Creates two tasks:
+ *   - Blinky task: toggles P@USER_LED_PORT@@USER_LED_PIN@ (onboard LED)
+ *   - Hello task:  prints over semihosting (add real UART later)
+ *
+ * Still pure-register style for peripheral access — FreeRTOS only
+ * handles scheduling, not hardware abstraction.
+ */
+
+#include "stm32l476_regs.h"
+#include "FreeRTOS.h"
+#include "task.h"
+
+static void led_init(void) {
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIO@USER_LED_PORT@EN;
+    GPIO@USER_LED_PORT@->MODER &= ~(0x3U << (@USER_LED_PIN@ * 2));
+    GPIO@USER_LED_PORT@->MODER |=  (GPIO_MODE_OUTPUT << (@USER_LED_PIN@ * 2));
+}
+
+static void blinky_task(void *arg) {
+    (void) arg;
+    const TickType_t period = pdMS_TO_TICKS(500);
+    for (;;) {
+        GPIO@USER_LED_PORT@->ODR ^= (1U << @USER_LED_PIN@);
+        vTaskDelay(period);
+    }
+}
+
+static void hello_task(void *arg) {
+    (void) arg;
+    const TickType_t period = pdMS_TO_TICKS(1000);
+    uint32_t count = 0;
+    for (;;) {
+        /* Replace with real UART/ITM output later */
+        (void) count++;
+        vTaskDelay(period);
+    }
+}
+
+int main(void) {
+    led_init();
+
+    xTaskCreate(blinky_task, "blink", 128, NULL, tskIDLE_PRIORITY + 1, NULL);
+    xTaskCreate(hello_task,  "hello", 256, NULL, tskIDLE_PRIORITY + 1, NULL);
+
+    vTaskStartScheduler();
+
+    /* Should never reach here — means scheduler couldn't start (OOM?) */
+    for (;;) { }
+}
+
+/* ─── FreeRTOS hooks (required by config options below) ──────────────── */
+void vApplicationStackOverflowHook(TaskHandle_t task, char *name) {
+    (void) task; (void) name;
+    __asm__ volatile ("bkpt #0");
+    for (;;) { }
+}
+
+void vApplicationMallocFailedHook(void) {
+    __asm__ volatile ("bkpt #0");
+    for (;;) { }
+}

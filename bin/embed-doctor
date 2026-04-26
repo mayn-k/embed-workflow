@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# embed-doctor — diagnose common embed-workflow install problems.
+#
+# Run this anytime things aren't working. It checks:
+#   - PATH includes ~/.local/bin
+#   - All helper scripts resolved and executable
+#   - tmux config sourced and bindings registered
+#   - Required tools present
+#   - Board is plugged in (if Nucleo-L476RG)
+
+set +e  # we want to report problems, not exit on them
+
+C_GRN=$'\e[32m'; C_YLW=$'\e[33m'; C_RED=$'\e[31m'; C_BLU=$'\e[34m'; C_RST=$'\e[0m'
+ok()   { printf '%s✓%s %s\n' "$C_GRN" "$C_RST" "$*"; }
+bad()  { printf '%s✗%s %s\n' "$C_RED" "$C_RST" "$*"; }
+warn() { printf '%s!%s %s\n' "$C_YLW" "$C_RST" "$*"; }
+say()  { printf '\n%s── %s ──%s\n' "$C_BLU" "$*" "$C_RST"; }
+
+# ─── 1. PATH ─────────────────────────────────────────────────────────────────
+say "PATH"
+if echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
+    ok "~/.local/bin is on PATH"
+else
+    bad "~/.local/bin is NOT on PATH"
+    warn "Add to ~/.bashrc AND ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
+
+# ─── 2. Commands resolve ─────────────────────────────────────────────────────
+say "embed commands"
+for cmd in embed embed-session.sh \
+           embed-popup-shell embed-popup-serial embed-popup-build \
+           embed-popup-flash embed-popup-erase; do
+    path="$(command -v "$cmd" 2>/dev/null || true)"
+    if [[ -n "$path" ]]; then
+        if [[ -x "$path" ]]; then
+            ok "$cmd → $path"
+        else
+            bad "$cmd found at $path but NOT executable"
+            warn "Fix: chmod +x $(readlink -f "$path")"
+        fi
+    else
+        bad "$cmd not found on PATH"
+    fi
+done
+
+# ─── 3. tmux config ──────────────────────────────────────────────────────────
+say "tmux"
+if ! command -v tmux >/dev/null 2>&1; then
+    bad "tmux not installed"
+else
+    ver="$(tmux -V | awk '{print $2}')"
+    ok "tmux $ver"
+
+    major="${ver%%.*}"; minor="${ver#*.}"; minor="${minor%%.*}"
+    if [[ "$major" -lt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -lt 2 ]]; }; then
+        bad "tmux $ver is too old — popups need >= 3.2"
+    fi
+
+    if [[ -n "${TMUX:-}" ]]; then
+        # We're inside tmux — check bindings are actually registered
+        for key in g t B F E S; do
+            binding="$(tmux list-keys -T prefix 2>/dev/null | grep -E "^bind-key +-T prefix +$key " || true)"
+            if echo "$binding" | grep -q "embed-popup"; then
+                ok "prefix + $key is bound to embed-popup-*"
+            elif echo "$binding" | grep -q "display-popup"; then
+                warn "prefix + $key has a display-popup binding, but not ours (may be stale)"
+            elif [[ -z "$binding" ]]; then
+                bad "prefix + $key is NOT bound"
+                warn "Reload tmux: tmux source ~/.tmux.conf   (or: tmux kill-server)"
+            else
+                warn "prefix + $key is bound to something else: $binding"
+            fi
+        done
+    else
+        warn "Not inside a tmux session. Start tmux to test bindings."
+    fi
+
+    # Check source-file line exists in ~/.tmux.conf
+    if grep -q "embed.tmux.conf" "$HOME/.tmux.conf" 2>/dev/null; then
+        ok "~/.tmux.conf sources embed.tmux.conf"
+    else
+        bad "~/.tmux.conf does NOT source embed.tmux.conf"
+        warn "Run install.sh again, or manually add:"
+        warn "  source-file <path>/embed-workflow/tmux/embed.tmux.conf"
+    fi
+fi
+
+# ─── 4. Tools ────────────────────────────────────────────────────────────────
+say "toolchain & tools"
+for t in arm-none-eabi-gcc openocd tio bear fzf git nvim; do
+    if command -v "$t" >/dev/null 2>&1; then
+        ok "$t → $(command -v "$t")"
+    else
+        bad "$t not installed"
+    fi
+done
+
+# arm-none-eabi-gdb OR gdb-multiarch
+if command -v arm-none-eabi-gdb >/dev/null 2>&1; then
+    ok "arm-none-eabi-gdb present"
+elif command -v gdb-multiarch >/dev/null 2>&1; then
+    warn "arm-none-eabi-gdb missing, gdb-multiarch present — Makefile uses arm-none-eabi-gdb"
+    warn "Either: sudo ln -s \$(which gdb-multiarch) /usr/local/bin/arm-none-eabi-gdb"
+    warn "Or: edit Makefile GDB := gdb-multiarch"
+else
+    bad "no ARM gdb found (install gcc-arm-none-eabi or gdb-multiarch)"
+fi
+
+# ─── 5. Hardware ─────────────────────────────────────────────────────────────
+say "hardware"
+if ls /dev/ttyACM* >/dev/null 2>&1; then
+    for dev in /dev/ttyACM*; do ok "serial device: $dev"; done
+else
+    warn "No /dev/ttyACM* devices — board not plugged in?"
+fi
+if ls /dev/ttyUSB* >/dev/null 2>&1; then
+    for dev in /dev/ttyUSB*; do ok "USB serial: $dev"; done
+fi
+
+# ST-Link via lsusb
+if command -v lsusb >/dev/null 2>&1; then
+    if lsusb 2>/dev/null | grep -qi "stlink\|st-link\|STMicroelectronics"; then
+        ok "ST-Link detected on USB"
+        lsusb 2>/dev/null | grep -i "stlink\|st-link\|STMicroelectronics" | sed 's/^/    /'
+    else
+        warn "No ST-Link on lsusb (is the Nucleo plugged in?)"
+    fi
+fi
+
+# udev access
+if [[ -e /dev/ttyACM0 ]]; then
+    if [[ -r /dev/ttyACM0 && -w /dev/ttyACM0 ]]; then
+        ok "/dev/ttyACM0 readable+writable by current user"
+    else
+        bad "/dev/ttyACM0 not accessible without sudo"
+        warn "Fix:  sudo usermod -aG dialout \$USER   (then log out and back in)"
+    fi
+fi
+
+echo
+echo "Done. Issues flagged above with ✗."

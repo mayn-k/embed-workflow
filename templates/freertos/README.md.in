@@ -1,0 +1,73 @@
+# @PROJECT@
+
+Embedded project for **@BOARD_NAME@** (@MCU@) running **FreeRTOS V11.1.0**.
+Peripheral access: pure-register style (no HAL).
+
+## Layout
+
+```
+@PROJECT@/
+├── src/                        application code (main.c creates tasks)
+├── inc/                        headers (stm32l476_regs.h)
+├── config/                     FreeRTOSConfig.h
+├── startup/                    startup.c — vector table
+├── linker/                     linker.ld
+├── middleware/
+│   └── FreeRTOS-Kernel/        the kernel (cloned at project creation)
+├── build/                      .o / .d files (git-ignored)
+├── bin/                        .elf / .bin / .hex / .map (git-ignored)
+├── .embed/                     workflow metadata
+└── Makefile
+```
+
+## The two tasks it starts
+
+`src/main.c` creates:
+
+- **`blink`** (prio 1, stack 128 words) — toggles P@USER_LED_PORT@@USER_LED_PIN@ every 500 ms
+- **`hello`** (prio 1, stack 256 words) — stub task every 1 s (add UART later)
+
+Plus hooks for stack overflow and malloc failure — both hit `bkpt #0` so your
+debugger drops in immediately if either fires.
+
+## Commands
+
+Same as bare-metal: `make`, `make flash`, `make openocd`, `make debug`,
+`make monitor`, `make clean`, `make ccdb`.
+
+If the kernel dir is missing (e.g., fresh clone without submodules):
+
+```sh
+git clone --depth 1 --branch V11.1.0 \
+    https://github.com/FreeRTOS/FreeRTOS-Kernel.git \
+    middleware/FreeRTOS-Kernel
+```
+
+## Debugging FreeRTOS in GDB
+
+Useful commands once you're in GDB (after `make debug`):
+
+```
+(gdb) info threads         # all tasks (with FreeRTOS GDB helper script)
+(gdb) thread N             # switch to task N's context
+(gdb) bt                   # backtrace for the task
+(gdb) print pxCurrentTCB   # currently running task
+(gdb) print uxSchedulerSuspended
+```
+
+For the full task list view, load `middleware/FreeRTOS-Kernel/tools/gdb-helper.py`
+(not included here — grab it from the FreeRTOS-Kernel repo if you want it).
+
+## Tuning
+
+- **Heap size**: `configTOTAL_HEAP_SIZE` in `config/FreeRTOSConfig.h` (default 16 KB)
+- **CPU clock**: `configCPU_CLOCK_HZ` — set to your actual clock after PLL setup
+- **Tick rate**: `configTICK_RATE_HZ` (default 1 kHz)
+- **Stack check**: `configCHECK_FOR_STACK_OVERFLOW = 2` (full pattern check) —
+  turn to 1 or 0 if you need the cycles back
+
+## Clock setup (important)
+
+Right now `configCPU_CLOCK_HZ = 4000000` because the MSI runs at 4 MHz on reset.
+When you write clock setup code (PLL → 80 MHz typical for L476), update this
+value or your tick rate will be wrong.

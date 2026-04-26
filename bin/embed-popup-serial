@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# embed-popup-serial — open tio serial monitor
+#
+# Resolution order:
+#   1. If current dir has .embed/serial.sh — use it (per-project config)
+#   2. Walk up to find .embed/serial.sh
+#   3. Fallback to /dev/ttyACM0 @ 115200
+#
+# This script is what tmux's `prefix + t` binding calls.
+
+pause_and_exit() {
+    local code="${1:-1}"
+    echo
+    echo "── press Enter to close ──"
+    read -r || true
+    exit "$code"
+}
+
+if ! command -v tio >/dev/null 2>&1; then
+    echo "ERROR: tio not installed."
+    echo "Install with: sudo apt install tio"
+    pause_and_exit 1
+fi
+
+# Find .embed/serial.sh by walking up
+dir="$PWD"
+while [[ "$dir" != "/" && "$dir" != "$HOME" ]]; do
+    if [[ -x "$dir/.embed/serial.sh" ]]; then
+        echo "Using $dir/.embed/serial.sh"
+        exec "$dir/.embed/serial.sh"
+    fi
+    dir="$(dirname "$dir")"
+done
+
+# Fallback: sensible defaults for Nucleo
+PORT="${EMBED_SERIAL_PORT:-/dev/ttyACM0}"
+BAUD="${EMBED_SERIAL_BAUD:-115200}"
+
+if [[ ! -e "$PORT" ]]; then
+    echo "ERROR: $PORT does not exist."
+    echo
+    echo "Is the board plugged in? Check with:"
+    echo "  ls /dev/ttyACM* /dev/ttyUSB*"
+    echo "  dmesg | tail -20"
+    pause_and_exit 1
+fi
+
+echo "No .embed/serial.sh found — using defaults ($PORT @ $BAUD)"
+echo
+exec tio "$PORT" -b "$BAUD"

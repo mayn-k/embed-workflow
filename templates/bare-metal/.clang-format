@@ -1,0 +1,35 @@
+---
+# .clang-format — embedded C style
+# Picked up automatically by clangd and by your nvim save-autocmd.
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+
+# Pointers/references: int *p, not int* p  (K&R style, easier with multiple decls)
+PointerAlignment: Right
+DerivePointerAlignment: false
+
+# Braces stay on the same line (attached style — good for embedded)
+BreakBeforeBraces: Attach
+
+# Don't touch include order aggressively
+IncludeBlocks: Preserve
+SortIncludes: Never
+
+# Leave typedef-driven code alone
+AlignConsecutiveDeclarations: false
+AlignConsecutiveAssignments: false
+
+# Keep short ifs/loops expanded (safer to read)
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: Inline
+
+# Cases indented one level under switch (avoids deep indentation)
+IndentCaseLabels: true
+
+SpaceBeforeParens: ControlStatements
+SpacesBeforePointerQualifiers: Default

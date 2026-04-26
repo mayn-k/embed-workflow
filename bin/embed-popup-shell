@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# embed-popup-shell — floating shell in current path
+exec "${SHELL:-/bin/bash}"

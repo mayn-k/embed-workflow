@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+bin/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# clangd
+compile_commands.json
+.cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp

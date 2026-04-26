@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# embed-popup-build — run `make` and keep popup open so you can see the output.
+#
+# The critical thing: this script does NOT exit immediately on failure.
+# If `make` fails, you see the error and press Enter to close.
+
+# Walk up to find a Makefile (tmux popup uses pane_current_path; if cursor's
+# inside a subdirectory of the project, we still want to build).
+dir="$PWD"
+while [[ "$dir" != "/" && "$dir" != "$HOME" ]]; do
+    if [[ -f "$dir/Makefile" ]]; then
+        cd "$dir" || exit 1
+        break
+    fi
+    dir="$(dirname "$dir")"
+done
+
+if [[ ! -f "Makefile" ]]; then
+    echo "ERROR: no Makefile found walking up from $PWD"
+    echo
+    echo "── press Enter to close ──"
+    read -r || true
+    exit 1
+fi
+
+echo "==> Building in $PWD"
+echo
+make
+status=$?
+echo
+if [[ $status -eq 0 ]]; then
+    echo "==> Build SUCCEEDED"
+else
+    echo "==> Build FAILED (exit $status)"
+fi
+echo
+echo "── press Enter to close ──"
+read -r || true
+exit $status

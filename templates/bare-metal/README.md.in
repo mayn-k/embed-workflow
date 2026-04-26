@@ -1,0 +1,69 @@
+# @PROJECT@
+
+Embedded project for **@BOARD_NAME@** (@MCU@).
+Style: **bare-metal, pure register access** (no HAL).
+
+## Layout
+
+```
+@PROJECT@/
+├── src/                    application code (start here: src/main.c)
+├── inc/                    headers (stm32l476_regs.h — minimal regs)
+├── startup/                startup.c — vector table + reset handler
+├── linker/                 linker.ld — memory map & sections
+├── build/                  object files (git-ignored)
+├── bin/                    .elf / .bin / .hex / .map (git-ignored)
+├── .embed/                 workflow metadata (board.conf, scripts)
+└── Makefile
+```
+
+## Build / flash / debug
+
+From the project root:
+
+| Command         | What it does                                           |
+|-----------------|--------------------------------------------------------|
+| `make`          | build `.elf` + `.bin` + `.hex`, print size             |
+| `make flash`    | flash to the board via OpenOCD                         |
+| `make erase`    | mass-erase the chip                                    |
+| `make reset`    | reset the MCU                                          |
+| `make openocd`  | start OpenOCD server (top debug pane)                  |
+| `make debug`    | start GDB, connect, load, break at `main`              |
+| `make monitor`  | open `tio` on `@SERIAL_PORT@` @ @SERIAL_BAUD@          |
+| `make size`     | section size breakdown                                 |
+| `make dump`     | full disassembly to `bin/*.lst`                        |
+| `make ccdb`     | regenerate `compile_commands.json` (for clangd)        |
+| `make clean`    | wipe `build/`, `bin/`, `compile_commands.json`         |
+
+## tmux session layout
+
+When launched via `embed open @PROJECT@`:
+
+- **editor** window — nvim
+- **debug** window — OpenOCD (top) + GDB (bottom), pre-typed, press Enter when ready
+
+Popups (any window):
+
+- `prefix + g` — shell popup
+- `prefix + t` — serial monitor (tio)
+- `prefix + B` — build popup
+- `prefix + F` — flash popup
+- `prefix + E` — erase (asks to confirm)
+
+## Debugging workflow (typical loop)
+
+1. Plug in the board. `lsusb` should show "STMicroelectronics ST-LINK/V2.1".
+2. Go to **debug** window (`prefix + 2`).
+3. Top pane: press Enter to run `make openocd`. Should print `Listening on port 3333`.
+4. Bottom pane: press Enter to run `make debug`. GDB connects, loads the ELF, breaks at `main`.
+5. Standard GDB: `n` / `s` / `c` / `info registers` / `x/16xw 0x48000000` etc.
+6. Serial output: `prefix + t` anywhere.
+
+## First build
+
+```sh
+make
+make flash
+```
+
+LED on pin P@USER_LED_PORT@@USER_LED_PIN@ should blink.

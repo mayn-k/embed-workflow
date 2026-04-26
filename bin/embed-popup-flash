@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# embed-popup-flash — run `make flash` and stay open.
+
+dir="$PWD"
+while [[ "$dir" != "/" && "$dir" != "$HOME" ]]; do
+    if [[ -f "$dir/Makefile" ]]; then
+        cd "$dir" || exit 1
+        break
+    fi
+    dir="$(dirname "$dir")"
+done
+
+if [[ ! -f "Makefile" ]]; then
+    echo "ERROR: no Makefile found"
+    echo "── press Enter to close ──"
+    read -r || true
+    exit 1
+fi
+
+echo "==> Flashing from $PWD"
+echo
+make flash
+status=$?
+echo
+echo "── press Enter to close ──"
+read -r || true
+exit $status

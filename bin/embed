@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+#
+# embed — embedded systems project & workflow launcher
+#
+# Usage:
+#   embed new <project> <board> [--os=bare|freertos]
+#   embed open <project>
+#   embed list projects | embed list boards
+#   embed flash <project>
+#   embed help
+#
+set -euo pipefail
+
+# ─── Paths ───────────────────────────────────────────────────────────────────
+EMBED_ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+BOARDS_DIR="$EMBED_ROOT/boards"
+TEMPLATES_DIR="$EMBED_ROOT/templates"
+PROJECTS_DIR="${EMBED_PROJECTS_DIR:-$HOME/work/embedded_systems/projects}"
+SESSION_SCRIPT="$EMBED_ROOT/tmux/embed-session.sh"
+
+# ─── Colors ──────────────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+    C_RED=$'\e[31m'; C_GRN=$'\e[32m'; C_YLW=$'\e[33m'
+    C_BLU=$'\e[34m'; C_DIM=$'\e[2m';  C_RST=$'\e[0m'
+else
+    C_RED=''; C_GRN=''; C_YLW=''; C_BLU=''; C_DIM=''; C_RST=''
+fi
+say()   { printf '%s▸%s %s\n' "$C_BLU" "$C_RST" "$*"; }
+ok()    { printf '%s✓%s %s\n' "$C_GRN" "$C_RST" "$*"; }
+warn()  { printf '%s!%s %s\n' "$C_YLW" "$C_RST" "$*" >&2; }
+die()   { printf '%s✗%s %s\n' "$C_RED" "$C_RST" "$*" >&2; exit 1; }
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+usage() {
+    cat <<EOF
+${C_BLU}embed${C_RST} — embedded systems project launcher
+
+${C_YLW}Usage:${C_RST}
+  embed new <project> <board> [--os=bare|freertos]
+  embed open <project>
+  embed list projects | embed list boards
+  embed flash <project>
+  embed help
+
+${C_YLW}Examples:${C_RST}
+  embed new blink nucleo-l476rg
+  embed new rtos-demo nucleo-l476rg --os=freertos
+  embed open blink
+  embed list boards
+
+${C_YLW}Env:${C_RST}
+  EMBED_PROJECTS_DIR   where projects live (default: $HOME/work/embedded_systems/projects)
+EOF
+}
+
+load_board() {
+    local board="$1"
+    local conf="$BOARDS_DIR/$board.conf"
+    [[ -f "$conf" ]] || die "Unknown board: $board. Run 'embed list boards' to see options."
+    # shellcheck disable=SC1090
+    source "$conf"
+}
+
+# Expand @VAR@ markers in a file using currently-set env vars.
+# Much safer than envsubst because we only touch @TOKENS@ not $VAR.
+render_template() {
+    local src="$1" dst="$2"
+    # Read whole file, do sed substitutions
+    local content
+    content="$(cat "$src")"
+    # Every var we might substitute:
+    local vars=(
+        PROJECT BOARD_ID BOARD_NAME MCU
+        CPU FPU FLOAT_ABI
+        FLASH_ORIGIN FLASH_SIZE RAM_ORIGIN RAM_SIZE
+        TOOLCHAIN_PREFIX
+        OPENOCD_CFG OPENOCD_CHIP_FAMILY
+        SERIAL_PORT SERIAL_BAUD
+        USER_LED_PORT USER_LED_PIN
+        OS_NAME EMBED_ROOT
+    )
+    for v in "${vars[@]}"; do
+        local val="${!v:-}"
+        # Escape for sed replacement (handle / and &)
+        val="${val//\\/\\\\}"; val="${val//\//\\/}"; val="${val//&/\\&}"
+        content="$(printf '%s' "$content" | sed "s/@${v}@/${val}/g")"
+    done
+    printf '%s\n' "$content" > "$dst"
+}
+
+# ─── Subcommands ─────────────────────────────────────────────────────────────
+
+cmd_list() {
+    local what="${1:-projects}"
+    case "$what" in
+        boards)
+            printf "%s\n" "Available boards:"
+            for f in "$BOARDS_DIR"/*.conf; do
+                [[ -f "$f" ]] || continue
+                (
+                    # shellcheck disable=SC1090
+                    source "$f"
+                    printf "  %-20s %s (%s)\n" "$BOARD_ID" "$BOARD_NAME" "$MCU"
+                )
+            done
+            ;;
+        projects)
+            printf "%s\n" "Projects in $PROJECTS_DIR:"
+            if [[ -d "$PROJECTS_DIR" ]]; then
+                for d in "$PROJECTS_DIR"/*/; do
+                    [[ -d "$d" ]] || continue
+                    local name
+                    name="$(basename "$d")"
+                    local board="?"
+                    [[ -f "$d/.embed/board.conf" ]] && \
+                        board="$(grep -E '^BOARD_ID=' "$d/.embed/board.conf" | cut -d'"' -f2)"
+                    printf "  %-25s [%s]\n" "$name" "$board"
+                done
+            else
+                warn "Projects dir does not exist yet: $PROJECTS_DIR"
+            fi
+            ;;
+        *)
+            die "Unknown list target: $what (use 'projects' or 'boards')"
+            ;;
+    esac
+}
+
+cmd_new() {
+    local project="${1:-}" board="${2:-}"; shift 2 || true
+    local os="bare"
+    for arg in "$@"; do
+        case "$arg" in
+            --os=*) os="${arg#--os=}" ;;
+            *) die "Unknown arg: $arg" ;;
+        esac
+    done
+
+    [[ -n "$project" ]] || die "Project name required. See 'embed help'."
+    [[ -n "$board"   ]] || die "Board required. See 'embed list boards'."
+    [[ "$os" =~ ^(bare|freertos)$ ]] || die "--os must be 'bare' or 'freertos'"
+
+    local tpl_dir="$TEMPLATES_DIR/$([ "$os" = "freertos" ] && echo freertos || echo bare-metal)"
+    [[ -d "$tpl_dir" ]] || die "Template not found: $tpl_dir"
+
+    load_board "$board"
+
+    local dest="$PROJECTS_DIR/$project"
+    [[ ! -e "$dest" ]] || die "Project already exists: $dest"
+
+    say "Creating project '$project' (board=$BOARD_NAME, os=$os)"
+    mkdir -p "$dest"
+    PROJECT="$project"
+    OS_NAME="$os"
+    export PROJECT BOARD_ID BOARD_NAME MCU CPU FPU FLOAT_ABI \
+           FLASH_ORIGIN FLASH_SIZE RAM_ORIGIN RAM_SIZE \
+           TOOLCHAIN_PREFIX OPENOCD_CFG OPENOCD_CHIP_FAMILY \
+           SERIAL_PORT SERIAL_BAUD USER_LED_PORT USER_LED_PIN \
+           OS_NAME EMBED_ROOT
+
+    # Copy/render template tree
+    (
+        cd "$tpl_dir"
+        find . -type f | while read -r f; do
+            local rel="${f#./}"
+            local target="$dest/$rel"
+            # Strip .in suffix from output filename (templated files)
+            if [[ "$rel" == *.in ]]; then
+                target="$dest/${rel%.in}"
+            fi
+            mkdir -p "$(dirname "$target")"
+            if [[ "$rel" == *.in ]]; then
+                render_template "$f" "$target"
+            else
+                cp "$f" "$target"
+            fi
+            # Preserve executable bit (don't let a false test trip set -e)
+            if [[ -x "$f" ]]; then chmod +x "$target"; fi
+        done
+        true  # guarantee subshell exits 0
+    )
+
+    # Stash the board conf in the project so popups/scripts can read it
+    cp "$BOARDS_DIR/$board.conf" "$dest/.embed/board.conf"
+    echo "PROJECT=\"$project\"" > "$dest/.embed/project.conf"
+    echo "OS=\"$os\""          >> "$dest/.embed/project.conf"
+
+    # Make .embed scripts executable
+    chmod +x "$dest"/.embed/*.sh 2>/dev/null || true
+
+    # If FreeRTOS, fetch kernel
+    if [[ "$os" = "freertos" ]]; then
+        fetch_freertos "$dest"
+    fi
+
+    ok "Project created at: $dest"
+    say "Launching tmux session..."
+    launch_session "$project" "$dest"
+}
+
+cmd_open() {
+    local project="${1:-}"
+    [[ -n "$project" ]] || die "Project name required"
+    local dest="$PROJECTS_DIR/$project"
+    [[ -d "$dest" ]] || die "Project not found: $dest"
+    launch_session "$project" "$dest"
+}
+
+cmd_flash() {
+    local project="${1:-}"
+    [[ -n "$project" ]] || die "Project name required"
+    local dest="$PROJECTS_DIR/$project"
+    [[ -d "$dest" ]] || die "Project not found: $dest"
+    ( cd "$dest" && make flash )
+}
+
+launch_session() {
+    local project="$1" dest="$2"
+    if [[ "${EMBED_SKIP_LAUNCH:-0}" = "1" ]]; then
+        say "(EMBED_SKIP_LAUNCH=1; would launch tmux session '$project' in $dest)"
+        return 0
+    fi
+    [[ -x "$SESSION_SCRIPT" ]] || die "Session script missing or not executable: $SESSION_SCRIPT"
+    "$SESSION_SCRIPT" "$project" "$dest"
+}
+
+FREERTOS_TAG="V11.1.0"
+
+fetch_freertos() {
+    local dest="$1"
+    local kernel_dir="$dest/middleware/FreeRTOS-Kernel"
+    say "Fetching FreeRTOS-Kernel $FREERTOS_TAG into middleware/ (shallow clone)"
+    if ! command -v git >/dev/null 2>&1; then
+        warn "git not installed — skipping FreeRTOS kernel fetch"
+        warn "Install with: sudo apt install git"
+        return
+    fi
+    mkdir -p "$(dirname "$kernel_dir")"
+    if git clone --depth 1 --branch "$FREERTOS_TAG" \
+        https://github.com/FreeRTOS/FreeRTOS-Kernel.git \
+        "$kernel_dir" 2>&1 | sed 's/^/    /'; then
+        ok "FreeRTOS-Kernel $FREERTOS_TAG fetched"
+    else
+        warn "FreeRTOS kernel fetch failed. You can retry manually:"
+        warn "  git clone --depth 1 --branch $FREERTOS_TAG https://github.com/FreeRTOS/FreeRTOS-Kernel.git $kernel_dir"
+    fi
+}
+
+# ─── Dispatch ────────────────────────────────────────────────────────────────
+main() {
+    local sub="${1:-help}"; shift || true
+    case "$sub" in
+        new)    cmd_new   "$@" ;;
+        open)   cmd_open  "$@" ;;
+        list)   cmd_list  "$@" ;;
+        flash)  cmd_flash "$@" ;;
+        help|-h|--help) usage ;;
+        *) usage; die "Unknown subcommand: $sub" ;;
+    esac
+}
+main "$@"

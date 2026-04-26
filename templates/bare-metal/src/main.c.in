@@ -1,0 +1,35 @@
+/*
+ * main.c — blinky on @BOARD_NAME@
+ *
+ * Toggles the user LED on P@USER_LED_PORT@@USER_LED_PIN@ (the onboard LED).
+ * Uses pure register access — no HAL, no CMSIS device header.
+ * The only includes are our own minimal register definitions.
+ *
+ * After reset, the chip runs from the MSI oscillator at ~4 MHz. We don't
+ * touch clocks here — minimal blinky first, clock setup comes later.
+ */
+
+#include "stm32l476_regs.h"
+
+static void delay(volatile uint32_t n) {
+    while (n--) { __asm__ volatile ("nop"); }
+}
+
+int main(void) {
+    /* 1. Enable the GPIO@USER_LED_PORT@ peripheral clock
+     *    (writing to GPIO registers without the clock on = silent no-op) */
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIO@USER_LED_PORT@EN;
+
+    /* 2. Configure P@USER_LED_PORT@@USER_LED_PIN@ as a general-purpose output.
+     *    MODER has 2 bits per pin: 00=input, 01=output, 10=AF, 11=analog.
+     *    Clear then set to avoid trashing other pins' modes. */
+    GPIO@USER_LED_PORT@->MODER &= ~(0x3U << (@USER_LED_PIN@ * 2));
+    GPIO@USER_LED_PORT@->MODER |=  (GPIO_MODE_OUTPUT << (@USER_LED_PIN@ * 2));
+
+    /* 3. Blink forever. Toggle via ODR XOR; for atomic sets/resets
+     *    you'd use BSRR (upper 16 bits reset, lower 16 bits set). */
+    while (1) {
+        GPIO@USER_LED_PORT@->ODR ^= (1U << @USER_LED_PIN@);
+        delay(200000);
+    }
+}
