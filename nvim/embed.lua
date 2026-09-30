@@ -113,13 +113,35 @@ function M.erase()    make_target("erase")           end
 function M.reset()    make_target("reset")           end
 function M.size()     make_target("size")            end
 function M.clean()    make_target("clean")           end
-function M.ccdb()     make_target("ccdb")            end
+-- Regenerate compile_commands.json for clangd. Runs bear around a full
+-- rebuild directly, so it works with any Makefile (including one you wrote
+-- from scratch that has no `ccdb` target).
+function M.ccdb()
+  local root = project_root()
+  local cmd = string.format(
+    "cd %s && bear --output compile_commands.json -- make -B",
+    vim.fn.shellescape(root))
+  tmux_send("__popup__", cmd)
+end
 
--- Debug: OpenOCD to top pane, GDB to bottom — both in 'debug' window
+-- Debug: OpenOCD to top pane, GDB to bottom — both in 'debug' window.
+-- Assignment projects have no `openocd`/`debug` targets until you write
+-- them, so there we only jump to the debug window, where the raw commands
+-- are already typed (press Enter in each pane).
 function M.debug()
   if not has_tmux() then
     vim.notify("embed: :Debug requires tmux", vim.log.levels.ERROR)
     return
+  end
+  local pconf = project_root() .. "/.embed/project.conf"
+  if vim.fn.filereadable(pconf) == 1 then
+    for _, line in ipairs(vim.fn.readfile(pconf)) do
+      if line == 'MODE="assignment"' then
+        M.debug_window()
+        vim.notify("embed: press Enter in the top pane (openocd), then the bottom (gdb)")
+        return
+      end
+    end
   end
   make_target("openocd", { pane = "debug.0" })
   vim.defer_fn(function()

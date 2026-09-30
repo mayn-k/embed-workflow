@@ -45,13 +45,31 @@ tmux send-keys -t "$SESSION:editor" 'nvim .' C-m
 tmux new-window  -t "$SESSION" -n debug -c "$PROJECT_DIR"
 tmux split-window -t "$SESSION:debug" -v -c "$PROJECT_DIR"
 
-# Pre-type the commands but don't execute — user hits Enter when board is plugged in
-tmux send-keys -t "$SESSION:debug.0" 'make openocd'
-tmux send-keys -t "$SESSION:debug.1" 'make debug'
+# Pre-type the commands but don't execute — user hits Enter when board is plugged in.
+# Assignment projects start with an empty Makefile, so they get the raw commands
+# (they work before you've written any `openocd`/`debug` targets).
+MODE="template"
+if grep -q '^MODE="assignment"' "$PROJECT_DIR/.embed/project.conf" 2>/dev/null; then
+    MODE="assignment"
+fi
+if [[ "$MODE" = "assignment" ]]; then
+    OCD_CMD="openocd -f ${OPENOCD_CFG:-board/stm32f4discovery.cfg}"
+    GDB_CMD="${TOOLCHAIN_PREFIX:-arm-none-eabi-}gdb -ex \"target extended-remote :3333\" -ex \"monitor reset halt\" \$(find . -name '*.elf' -not -path './.git/*' | head -1)"
+else
+    OCD_CMD="make openocd"
+    GDB_CMD="make debug"
+fi
+tmux send-keys -t "$SESSION:debug.0" -l "$OCD_CMD"
+tmux send-keys -t "$SESSION:debug.1" -l "$GDB_CMD"
 tmux select-pane -t "$SESSION:debug.0"
 
 # Land the user on editor
 tmux select-window -t "$SESSION:editor"
+
+# Test hook: build the session without attaching
+if [[ "${EMBED_NO_ATTACH:-0}" = "1" ]]; then
+    exit 0
+fi
 
 # Attach / switch
 if [[ -n "${TMUX:-}" ]]; then

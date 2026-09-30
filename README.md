@@ -69,6 +69,25 @@ Popups from any window (prefix = `C-s`):
 - `prefix + E` — erase (confirms first)
 - `prefix + S` — fuzzy-pick an embed project to switch to
 
+## Assignment mode
+
+```sh
+embed new lab3-stm32 stm32f411e-disco --assignment --course="ECEN 5613"
+```
+
+Creates `src/ inc/ drivers/ startup/ linker/` and four files that contain only
+a comment header (file, project, board, author, course, date, honor pledge):
+`Makefile`, `linker/linker.ld`, `startup/startup.s`, `src/main.c`. No code.
+
+The popups and nvim commands still work because they call `make <target>`.
+Give your Makefile these targets: `all`, `flash`, `erase`, `openocd`, `debug`,
+`clean`. Until `openocd`/`debug` exist, the debug window has raw `openocd` and
+`gdb` commands pre-typed. `<leader>mc` runs `bear -- make -B` directly, so
+clangd works with any Makefile.
+
+Boards marked `TEMPLATES="assignment"` in their conf (e.g. the F411E-Discovery)
+refuse the full template, since the bundled register header is STM32L4-only.
+
 ## Adding a new board
 
 Drop a new `.conf` file in `boards/`. Example minimum:

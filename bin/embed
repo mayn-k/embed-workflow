@@ -37,19 +37,26 @@ ${C_BLU}embed${C_RST} — embedded systems project launcher
 
 ${C_YLW}Usage:${C_RST}
   embed new <project> <board> [--os=bare|freertos]
+  embed new <project> <board> --assignment [--course="ECEN 5613"]
   embed open <project>
   embed list projects | embed list boards
   embed flash <project>
   embed help
 
+${C_YLW}Modes:${C_RST}
+  (default)      full template: working Makefile, linker script, startup, blinky
+  --assignment   folders + header-only files; you write every line of code
+
 ${C_YLW}Examples:${C_RST}
   embed new blink nucleo-l476rg
   embed new rtos-demo nucleo-l476rg --os=freertos
+  embed new lab3-stm32 stm32f411e-disco --assignment --course="ECEN 5613"
   embed open blink
   embed list boards
 
 ${C_YLW}Env:${C_RST}
   EMBED_PROJECTS_DIR   where projects live (default: $HOME/work/embedded_systems/projects)
+  EMBED_AUTHOR         author name for assignment headers (default: git user.name)
 EOF
 }
 
@@ -100,7 +107,9 @@ cmd_list() {
                 (
                     # shellcheck disable=SC1090
                     source "$f"
-                    printf "  %-20s %s (%s)\n" "$BOARD_ID" "$BOARD_NAME" "$MCU"
+                    note=""
+                    [[ "${TEMPLATES:-}" = "assignment" ]] && note="  (--assignment only)"
+                    printf "  %-20s %s (%s)%s\n" "$BOARD_ID" "$BOARD_NAME" "$MCU" "$note"
                 )
             done
             ;;
@@ -111,10 +120,13 @@ cmd_list() {
                     [[ -d "$d" ]] || continue
                     local name
                     name="$(basename "$d")"
-                    local board="?"
+                    local board="?" mode="template"
                     [[ -f "$d/.embed/board.conf" ]] && \
                         board="$(grep -E '^BOARD_ID=' "$d/.embed/board.conf" | cut -d'"' -f2)"
-                    printf "  %-25s [%s]\n" "$name" "$board"
+                    if grep -q '^MODE="assignment"' "$d/.embed/project.conf" 2>/dev/null; then
+                        mode="assignment"
+                    fi
+                    printf "  %-25s [%s] %s\n" "$name" "$board" "$mode"
                 done
             else
                 warn "Projects dir does not exist yet: $PROJECTS_DIR"
@@ -128,10 +140,12 @@ cmd_list() {
 
 cmd_new() {
     local project="${1:-}" board="${2:-}"; shift 2 || true
-    local os="bare"
+    local os="bare" mode="template" course=""
     for arg in "$@"; do
         case "$arg" in
-            --os=*) os="${arg#--os=}" ;;
+            --os=*)       os="${arg#--os=}" ;;
+            --assignment) mode="assignment" ;;
+            --course=*)   course="${arg#--course=}" ;;
             *) die "Unknown arg: $arg" ;;
         esac
     done
@@ -139,14 +153,29 @@ cmd_new() {
     [[ -n "$project" ]] || die "Project name required. See 'embed help'."
     [[ -n "$board"   ]] || die "Board required. See 'embed list boards'."
     [[ "$os" =~ ^(bare|freertos)$ ]] || die "--os must be 'bare' or 'freertos'"
-
-    local tpl_dir="$TEMPLATES_DIR/$([ "$os" = "freertos" ] && echo freertos || echo bare-metal)"
-    [[ -d "$tpl_dir" ]] || die "Template not found: $tpl_dir"
+    if [[ "$mode" = "assignment" && "$os" != "bare" ]]; then
+        die "--assignment and --os=freertos can't be combined (assignment mode generates no code)"
+    fi
 
     load_board "$board"
 
+    if [[ "$mode" = "template" && "${TEMPLATES:-}" = "assignment" ]]; then
+        die "$BOARD_NAME has no full template yet. Use: embed new $project $board --assignment"
+    fi
+
     local dest="$PROJECTS_DIR/$project"
     [[ ! -e "$dest" ]] || die "Project already exists: $dest"
+
+    if [[ "$mode" = "assignment" ]]; then
+        scaffold_assignment "$project" "$board" "$dest" "$course"
+        ok "Assignment project created at: $dest"
+        say "Launching tmux session..."
+        launch_session "$project" "$dest"
+        return
+    fi
+
+    local tpl_dir="$TEMPLATES_DIR/$([ "$os" = "freertos" ] && echo freertos || echo bare-metal)"
+    [[ -d "$tpl_dir" ]] || die "Template not found: $tpl_dir"
 
     say "Creating project '$project' (board=$BOARD_NAME, os=$os)"
     mkdir -p "$dest"
@@ -184,6 +213,7 @@ cmd_new() {
     cp "$BOARDS_DIR/$board.conf" "$dest/.embed/board.conf"
     echo "PROJECT=\"$project\"" > "$dest/.embed/project.conf"
     echo "OS=\"$os\""          >> "$dest/.embed/project.conf"
+    echo "MODE=\"template\""   >> "$dest/.embed/project.conf"
 
     # Make .embed scripts executable
     chmod +x "$dest"/.embed/*.sh 2>/dev/null || true
@@ -196,6 +226,105 @@ cmd_new() {
     ok "Project created at: $dest"
     say "Launching tmux session..."
     launch_session "$project" "$dest"
+}
+
+# ─── Assignment mode ─────────────────────────────────────────────────────────
+# Creates folders and files that contain ONLY a comment header. No code, no
+# outline. Tooling files (.embed/, .clang-format, .gitignore) are copied so the
+# tmux popups, serial monitor and clangd keep working.
+
+# write_header <file> <style: c|hash> <project> <course> <author>
+write_header() {
+    local file="$1" style="$2" project="$3" course="$4" author="$5"
+    local name; name="$(basename "$file")"
+    local date; date="$(date +%Y-%m-%d)"
+    local lines=(
+        "File        : $name"
+        "Project     : $project"
+        "Board       : $BOARD_NAME ($MCU)"
+        "Author      : $author"
+        "Course      : $course"
+        "Date        : $date"
+        ""
+        "Description :"
+        ""
+        "\"I have neither given nor received unauthorized assistance.\""
+    )
+    mkdir -p "$(dirname "$file")"
+    {
+        if [[ "$style" = "c" ]]; then
+            echo "/*"
+            for l in "${lines[@]}"; do
+                if [[ -z "$l" ]]; then echo " *"; else echo " * $l"; fi
+            done
+            echo " */"
+        else
+            for l in "${lines[@]}"; do
+                if [[ -z "$l" ]]; then echo "#"; else echo "# $l"; fi
+            done
+        fi
+        echo
+    } > "$file"
+}
+
+scaffold_assignment() {
+    local project="$1" board="$2" dest="$3" course="$4"
+    local author="${EMBED_AUTHOR:-$(git config --global user.name 2>/dev/null || true)}"
+    author="${author:-$USER}"
+
+    say "Creating assignment project '$project' (board=$BOARD_NAME)"
+    mkdir -p "$dest"/{src,inc,drivers,startup,linker,.embed}
+
+    # Header-only source files: you write everything below the header
+    write_header "$dest/Makefile"            hash "$project" "$course" "$author"
+    write_header "$dest/linker/linker.ld"    c    "$project" "$course" "$author"
+    write_header "$dest/startup/startup.s"   c    "$project" "$course" "$author"
+    write_header "$dest/src/main.c"          c    "$project" "$course" "$author"
+
+    # Tooling only (no code): popups, formatter, ignore rules
+    local tpl="$TEMPLATES_DIR/bare-metal"
+    cp "$tpl/.embed/"*.sh "$dest/.embed/"
+    chmod +x "$dest/.embed/"*.sh
+    cp "$tpl/.clang-format" "$dest/.clang-format"
+    cp "$tpl/.gitignore"    "$dest/.gitignore"
+
+    cp "$BOARDS_DIR/$board.conf" "$dest/.embed/board.conf"
+    {
+        echo "PROJECT=\"$project\""
+        echo "OS=\"bare\""
+        echo "MODE=\"assignment\""
+    } > "$dest/.embed/project.conf"
+
+    cat > "$dest/README.md" <<EOF
+# $project
+
+Assignment project on **$BOARD_NAME** ($MCU). Every line of code is yours.
+
+## Makefile targets the workflow calls
+
+The tmux popups and nvim commands run \`make <target>\`. Provide these
+targets in your Makefile as you build it up:
+
+| Target    | Used by                          |
+|-----------|----------------------------------|
+| \`all\`     | \`C-s B\`, \`<leader>mb\`            |
+| \`flash\`   | \`C-s F\`, \`<leader>mf\`            |
+| \`erase\`   | \`C-s E\`, \`<leader>me\`            |
+| \`openocd\` | \`<leader>md\` (debug window, top)   |
+| \`debug\`   | \`<leader>md\` (debug window, bottom)|
+| \`clean\`   | your own use                     |
+
+Until \`openocd\` and \`debug\` exist, the debug window (\`C-s 2\`) has the raw
+commands pre-typed, so debugging works from day one.
+
+## Board facts
+
+- Flash: $FLASH_ORIGIN, $FLASH_SIZE
+- RAM:   $RAM_ORIGIN, $RAM_SIZE
+- CPU:   $CPU, FPU $FPU (float ABI $FLOAT_ABI)
+- OpenOCD config: $OPENOCD_CFG
+- Serial: $SERIAL_PORT @ $SERIAL_BAUD (override in .embed/board.conf)
+EOF
 }
 
 cmd_open() {
