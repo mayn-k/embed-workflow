@@ -32,4 +32,4 @@ AllowShortFunctionsOnASingleLine: Inline
 IndentCaseLabels: true
 
 SpaceBeforeParens: ControlStatements
-SpacesBeforePointerQualifiers: Default
+SpaceAroundPointerQualifiers: Default

@@ -23,7 +23,7 @@ return {
                 "--completion-style=detailed",
                 "--function-arg-placeholders",
                 "--offset-encoding=utf-16",
-                "--query-driver=/usr/bin/arm-none-eabi-gcc,/usr/bin/arm-none-eabi-g++",
+                "--query-driver=/usr/bin/arm-none-eabi-*,/usr/local/bin/arm-none-eabi-*",
             },
             filetypes = { "c", "cpp", "h" },
             root_markers = { "compile_commands.json", "compile_flags.txt", ".git", "Makefile" },

@@ -41,6 +41,7 @@ ${C_YLW}Usage:${C_RST}
   embed open <project>
   embed list projects | embed list boards
   embed flash <project>
+  embed flags [project]       write compile_flags.txt (clangd include paths)
   embed help
 
 ${C_YLW}Modes:${C_RST}
@@ -217,6 +218,7 @@ cmd_new() {
 
     # Make .embed scripts executable
     chmod +x "$dest"/.embed/*.sh 2>/dev/null || true
+    write_compile_flags "$dest"
 
     # If FreeRTOS, fetch kernel
     if [[ "$os" = "freertos" ]]; then
@@ -267,6 +269,65 @@ write_header() {
     } > "$file"
 }
 
+# ─── clangd flags ────────────────────────────────────────────────────────────
+# compile_flags.txt tells clangd the target, CPU and include paths, so
+# #include "x.h" from inc/ resolves in the editor without depending on the
+# Makefile. clangd prefers compile_commands.json when that exists.
+# Uses the board vars currently loaded (load_board or a project's board.conf).
+write_compile_flags() {
+    local dest="$1"
+    local newlib_inc
+    newlib_inc="$("${TOOLCHAIN_PREFIX}gcc" -print-sysroot 2>/dev/null || true)"
+    if [[ -n "$newlib_inc" && -d "$newlib_inc/include" ]]; then
+        newlib_inc="$newlib_inc/include"
+    else
+        newlib_inc="/usr/lib/arm-none-eabi/include"
+    fi
+    {
+        echo "--target=arm-none-eabi"
+        echo "-mcpu=$CPU"
+        echo "-mthumb"
+        if [[ "${FPU:-none}" != "none" ]]; then
+            echo "-mfpu=$FPU"
+            echo "-mfloat-abi=$FLOAT_ABI"
+        fi
+        echo "-std=gnu11"
+        echo "-ffreestanding"
+        echo "-Wall"
+        echo "-Iinc"
+        echo "-Idrivers"
+        echo "-Isrc"
+        echo "-Iconfig"
+        echo "-isystem$newlib_inc"
+    } > "$dest/compile_flags.txt"
+}
+
+# embed flags [project] — (re)write compile_flags.txt for an existing project.
+# With no argument, uses the project containing the current directory.
+cmd_flags() {
+    local dest=""
+    if [[ -n "${1:-}" ]]; then
+        dest="$PROJECTS_DIR/$1"
+    else
+        local dir="$PWD"
+        while [[ "$dir" != "/" ]]; do
+            if [[ -f "$dir/.embed/board.conf" ]]; then dest="$dir"; break; fi
+            dir="$(dirname "$dir")"
+        done
+    fi
+    [[ -n "$dest" && -f "$dest/.embed/board.conf" ]] || \
+        die "Not inside an embed project (no .embed/board.conf). Pass a project name."
+    # shellcheck disable=SC1091
+    source "$dest/.embed/board.conf"
+    write_compile_flags "$dest"
+    ok "Wrote $dest/compile_flags.txt"
+    if [[ -f "$dest/compile_commands.json" ]]; then
+        warn "compile_commands.json exists and takes priority over compile_flags.txt."
+        warn "If includes still fail, regenerate it (<leader>mc) or delete it."
+    fi
+    say "In nvim: :LspRestart"
+}
+
 scaffold_assignment() {
     local project="$1" board="$2" dest="$3" course="$4"
     local author="${EMBED_AUTHOR:-$(git config --global user.name 2>/dev/null || true)}"
@@ -287,6 +348,7 @@ scaffold_assignment() {
     chmod +x "$dest/.embed/"*.sh
     cp "$tpl/.clang-format" "$dest/.clang-format"
     cp "$tpl/.gitignore"    "$dest/.gitignore"
+    write_compile_flags "$dest"
 
     cp "$BOARDS_DIR/$board.conf" "$dest/.embed/board.conf"
     {
@@ -383,6 +445,7 @@ main() {
         open)   cmd_open  "$@" ;;
         list)   cmd_list  "$@" ;;
         flash)  cmd_flash "$@" ;;
+        flags)  cmd_flags "$@" ;;
         help|-h|--help) usage ;;
         *) usage; die "Unknown subcommand: $sub" ;;
     esac
